@@ -4,13 +4,13 @@ This repository contains resources related to the Ullmann project, including Car
 
 For detailed information, please refer to the associated manuscript: "add chemrxiv link"
 
-# Contents
+## Contents
 
-## Optimized Geometries
-.txt files containing optimized xyz coordinates for all aryl-bromides, primary amines, and ligands used in the project. All compounds were optimized at wB97X-D/def2-SVP.
-## Data File
+### Optimized Geometries
+.txt files containing optimized xyz coordinates for all aryl-bromides, primary amines, and ligands used in the project. All geometries were optimized at wB97X-D/def2-SVP.
+### Data File
 An Excel file containing both experimental and computed data.
-## Jupyter Notebook
+### Jupyter Notebook
 The Jupyter notebook used for data processing and modelling.
 
 
