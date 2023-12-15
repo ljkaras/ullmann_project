@@ -285,26 +285,40 @@ amine_df = pd.read_pickle('amine_df.pkl')
 ligands_df = pd.read_pickle('ligands_df.pkl')
 # Load pubchem links for ligands
 ligands = load_pickle('pubchem_lig.pkl')
-    
+
+print("...............................................................................")
+print(".                                                                             .")
+print(".                        Ullmann C–N prediction tool                          .")
+print(".                The Sigman Lab (contributor: Lucas Karas)                    .")
+print(".                                                                             .")
+print("...............................................................................")
+ 
 # INPUT SMILES FOR PRIMARY AMINE AND ARYL-BROMIDE:
 
 # Primary amine input loop
 amine_smiles, amine_pred = get_input("primary amine", amine_df, 'N𝛿–')
-
 # Display and retrieve information for primary amine
 display_structure("primary amine", amine_smiles, amine_df,)
 
 # Aryl-bromide input loop
 br_smiles, br_pred = get_input("aryl-bromide", br_df, 'Steric')
-
 # Display and retrieve information for aryl-bromide
 display_structure("aryl-bromide", br_smiles, br_df)
 
 # PREDICT THE YIELD OUTCOME, CONFIDENCE LEVEL, AND TOP LIGANDS
 
+# Normalize and stack input data
 x_target_norm, y_target_norm, input_data = normalize_and_stack(amine_pred, br_pred, loaded_x_values, loaded_y_values)
+
+# Get confidence prediction
 confidence_pred, message = get_confidence_prediction(x_target_norm, y_target_norm, confidence_model)
+
+# Get nearest neighbors and ligand information
 P1, P1_info, P2, P2_info = get_nearest_neighbors(input_data, knn_model, training_dict)
+
+# Plot confidence contour
 plot_confidence_contour(x_grid, y_grid, input_data, confidence_pred)
+
+# Display information on top ligands
 display_ligands_info(P1_info, ligands)
 display_ligands_info(P2_info, ligands)
