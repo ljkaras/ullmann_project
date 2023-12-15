@@ -9,23 +9,21 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
-from rdkit import Chem
-from rdkit.Chem import PandasTools
-from rdkit.Chem import Draw
+from rdkit import Chem, RDLogger
+from rdkit.Chem import PandasTools, AllChem, Draw
+from rdkit.Chem.Draw import rdMolDraw2D
 
-from IPython.display import display
+from IPython.display import Image, display
 
 import pickle
 from sklearn.neighbors import NearestNeighbors
-
+from PIL import Image
+from io import BytesIO
 import warnings
 
 # SET MATPLOTLIB STANDARDS:
-
 matplotlib.rcParams['font.family'] = 'Arial'
 matplotlib.rcParams['font.size'] = 10
-
-# HELPER FUNCTIONS:
 
 # Function to load pickle files
 def load_pickle(file_path):
@@ -121,9 +119,7 @@ def display_structure(smiles_type, smiles, substrate_dataframe):
 
     # Display the structure of the entered compound
     print(f"{smiles_type.capitalize()} structure:")
-    Draw.ShowMol(mol)
-    # <PILIMAGE>.show()
-    # display(plt_mol)
+    display(plt_mol)
 # Function to normalize the amine_pred and br_pred values
 def normalize_and_stack(amine_pred, br_pred, loaded_x_values, loaded_y_values):
     """
@@ -171,9 +167,9 @@ def get_confidence_prediction(x_target_norm, y_target_norm, confidence_model):
 
     # Display prediction results
     if confidence_pred[0] < 0:
-        message = f'This combination of aryl-bromide and primary amine is predicted to yield <20% with {-confidence_pred[0]:.1f}% confidence.'
+        message = f'Predicted yield for this reaction is \033[1m<20% with {-confidence_pred[0]:.1f}% confidence.\033[0m'
     else: 
-        message = f'This combination of aryl-bromide and primary amine is predicted to yield >20% with {confidence_pred[0]:.1f}% confidence.'
+        message = f'Predicted yield for this reaction is \033[1m>20% with {confidence_pred[0]:.1f}% confidence.\033[0m'
 
     print(message)
     return confidence_pred, message
@@ -217,6 +213,8 @@ def plot_confidence_contour(x_grid, y_grid, input_data, confidence_pred):
     - P1_info (dict): Information about the first nearest neighbor.
     - P2_info (dict): Information about the second nearest neighbor.
     """
+    plt.close()
+
     # Calculate confidence values on the meshgrid
     confidence_interp = confidence_model(x_grid, y_grid)
     # Clip confidence values to a reasonable range
@@ -233,39 +231,177 @@ def plot_confidence_contour(x_grid, y_grid, input_data, confidence_pred):
     scatter = plt.scatter(neighbors_data[:, 0], neighbors_data[:, 1], marker='o', s=10, color='black', linewidth=1)
     plt.xlabel('Amine [Normalized N$^\delta$$^–$]')
     plt.ylabel('Aryl-Bromide [Normalized Steric]')
+    
     plt.show()
 # Function to display the best ligands information
-def display_ligands_info(P_info, ligands):
+def display_ligands_info(neighbor, P1_info, P2_info, ligands):
     """
-    Display information about the top ligands of a given nearest neighbor.
+    Display information about the unique top ligands between two nearest neighbors.
 
     Parameters:
-    - P_info (dict): Information about the product, including top ligands.
+    - P1_info (dict): Information about the first product, including top ligands.
+    - P2_info (dict): Information about the second product, including top ligands.
     - ligands (dict): Dictionary mapping ligand names to PubChem links.
     """
-    # Define top 3 ligands as L1, L2, and L3
-    smiles_list = [ligands_df.loc[ligands_df['Compound_Name'] == P_info[f'Top_{i}_Ligand'], 'smiles'].values[0] for i in range(1, 4)]
-    name_list = [P_info[f'Top_{i}_Ligand'] for i in range(1, 4)]
-    yield_list = [P_info[f'Top_{i}_Yield'] for i in range(1, 4)]
+    # Extract the names of top ligands from both P1 and P2
+    ligands_P1 = {P1_info[f'Top_{i}_Ligand'] for i in range(1, 4)}
+    ligands_P2 = {P2_info[f'Top_{i}_Ligand'] for i in range(1, 4)}
 
-    # Create a list of Mol objects from SMILES
-    best_ligands = [Chem.MolFromSmiles(smi) for smi in smiles_list]
+    # Find the unique ligands between P1 and P2
+    unique_ligands = ligands_P1 | ligands_P2
 
-    # Create images of ligands and display them
-    plt_ligands = [Chem.Draw.MolToImage(mol, size=(300, 150), sanitize=False) for mol in best_ligands]
-    fig, axs = plt.subplots(1, 3, figsize=(8, 4))
-    for i, ax in enumerate(axs):
-        ax.imshow(plt_ligands[i])
-        ax.text(0.5, -0.1, f"{name_list[i]}\nYield: {yield_list[i]}%", ha='center', va='center', transform=ax.transAxes, fontsize=10)
-        ax.axis("off")
+    # Ensure there are spots for 6 ligands
+    unique_ligands |= {f'Empty_{i}' for i in range(1, 7 - len(unique_ligands))}
+
+    # Create an empty grid for ligands
+    ligand_grid = [['Empty' for _ in range(3)] for _ in range(2)]
+
+    # Populate the grid with ligands
+    row, col = 0, 0
+    for ligand in unique_ligands:
+        # Check if the ligand is empty
+        if ligand.startswith('Empty'):
+            continue
+
+        # Get the SMILES for the ligand
+        smiles = ligands_df.loc[ligands_df['Compound_Name'] == ligand, 'smiles'].values[0]
+
+        # Create a Mol object from SMILES
+        mol = Chem.MolFromSmiles(smiles)
+
+        # Assign ligand to the grid
+        ligand_grid[row][col] = {'ligand': ligand, 'mol': mol}
+
+        # Move to the next position in the grid
+        col += 1
+        if col == 3:
+            col = 0
+            row += 1
+
+    # Display the ligands in the grid
+    fig, axs = plt.subplots(2, 3, figsize=(10, 4))
+
+    for row in range(2):
+        for col in range(3):
+            ligand_data = ligand_grid[row][col]
+
+            # Check if the ligand is empty
+            if ligand_data == 'Empty':
+                axs[row, col].axis("off")
+                continue
+
+            # Display ligand image
+            axs[row, col].imshow(Chem.Draw.MolToImage(ligand_data['mol'], size=(400, 150), sanitize=False))
+            axs[row, col].text(0.5, -0.1, f"{ligand_data['ligand']}", ha='center', va='center',
+                               transform=axs[row, col].transAxes, fontsize=10)
+            axs[row, col].axis("off")
 
     plt.show()
 
-    print("Here are pubchem links for the three ligands:")
-    for i in range(1, 4):
-        print(f"{P_info[f'Top_{i}_Ligand']}: {ligands[P_info[f'Top_{i}_Ligand']]}")
+    print(f"Here are PubChem links for those ligands:")
+    for ligand in unique_ligands:
+        if "Ligand" in ligand:
+            print(f"L{int(ligand.split('_')[1])}: {ligands[ligand]}")
+# Function to get information about the top ligands for a given product
+def get_ligands_info(info_dict, num_top_ligands=3):
+    """
+    Extracts information about the top ligands and their yields from a given product (info_dict, e.g., P1_info).
 
-# LOADING PKL FILES:
+    Parameters:
+    - info_dict (dict): A dictionary containing information about ligands and yields.
+    - num_top_ligands (int): The number of top ligands to retrieve (default is 3).
+
+    Returns:
+    - ligands_info (list): A list of tuples containing information about each top ligand.
+                          Each tuple contains (ligand_label, ligand_info, yield_info).
+    """
+    ligands_info = []
+
+    # Loop through the specified number of top ligands
+    for i in range(1, num_top_ligands + 1):
+        ligand_key = f'Top_{i}_Ligand'
+        yield_key = f'Top_{i}_Yield'
+
+        # Extract ligand number from the ligand key
+        ligand_number = int(info_dict[ligand_key].split('_')[1])
+
+        # Append ligand information to the ligands_info list
+        ligands_info.append((f"L{ligand_number}", info_dict[ligand_key], info_dict[yield_key]))
+
+    # Return the list of ligands_info
+    return ligands_info
+# Function to print ligand name and yields for a product
+def print_product_info(product_name, ligands_info, neighbor_number):
+    """
+    Prints information about the nearest known product and its best ligands.
+
+    Parameters:
+    - product_name (str): The name of the nearest known product.
+    - ligands_info (list): A list of tuples containing information about the best ligands.
+    - neighbor_number (int): The number of the nearest neighbor (1 for the first, 2 for the second).
+
+    Returns:
+    - None
+    """
+    # Determine the neighbor name based on the neighbor number
+    neighbor_name = "" if neighbor_number == 1 else "second "
+
+    # Print information about the nearest known product and its best ligands
+    print(f"\nThe {neighbor_name}nearest known product is {product_name}. "
+          f"Best ligands for this product are:\n"
+          f"{ligands_info[0][0]} [{ligands_info[0][2]}% yield], "
+          f"{ligands_info[1][0]} [{ligands_info[1][2]}% yield], "
+          f"and {ligands_info[2][0]} [{ligands_info[2][2]}% yield]."
+    )
+# Function to plot the reaction between the coupling partners
+def draw_reaction_image(amine_smiles, br_smiles):
+    """
+    Draws a chemical reaction with reactants and products and displays the image.
+
+    Parameters:
+    - amine_smiles (str): SMILES representation of the amine reactant.
+    - br_smiles (str): SMILES representation of the bromide reactant.
+
+    Returns:
+    - None
+    """
+    # Define the reaction SMARTS
+    reaction_smarts = '[N:1].[c:2]-Br>>[c:2]-[N:1]'
+
+    # Create an RDKit reaction from SMARTS
+    rxn = AllChem.ReactionFromSmarts(reaction_smarts)
+
+    # Run the reaction
+    ps = rxn.RunReactants((Chem.MolFromSmiles(amine_smiles), Chem.MolFromSmiles(br_smiles)))
+
+    # Get the SMILES of the product
+    product_smiles = Chem.MolToSmiles(ps[0][0])
+
+    # Create RDKit molecule from product SMILES
+    product_mol = Chem.MolFromSmiles(product_smiles)
+
+    # Create RDKit reaction from SMILES
+    rxn_prod = AllChem.ReactionFromSmarts(f'{amine_smiles}.{br_smiles}>{"[Cu]"}>{product_smiles}', useSmiles=True)
+
+    # Draw the reaction with reactants and product
+    d2d = Draw.MolDraw2DCairo(500, 300)
+    d2d.drawOptions().minFontSize = 15
+    d2d.DrawReaction(rxn_prod)
+    d2d.FinishDrawing()
+
+    # Get the PNG image
+    # png = d2d.GetDrawingText()
+
+    # # Display the image
+    # display(Image(png))
+
+    # Get the PNG image
+    png = d2d.GetDrawingText()
+
+    # Display the image using matplotlib
+    img = Image.open(BytesIO(png))
+    plt.imshow(img)
+    plt.show()
 
 # Load min and max values for normalization
 loaded_x_values, loaded_y_values = load_pickle('min_max_values.pkl')
@@ -289,21 +425,27 @@ ligands = load_pickle('pubchem_lig.pkl')
 print("...............................................................................")
 print(".                                                                             .")
 print(".                        Ullmann C–N prediction tool                          .")
-print(".                The Sigman Lab (contributor: Lucas Karas)                    .")
+print(".                  The Sigman Lab (developer: Lucas Karas)                    .")
 print(".                                                                             .")
 print("...............................................................................")
- 
-# INPUT SMILES FOR PRIMARY AMINE AND ARYL-BROMIDE:
 
-# Primary amine input loop
+# # INPUT SMILES FOR PRIMARY AMINE AND ARYL-BROMIDE:
+
+# Primary amine input loop:
 amine_smiles, amine_pred = get_input("primary amine", amine_df, 'N𝛿–')
-# Display and retrieve information for primary amine
-display_structure("primary amine", amine_smiles, amine_df,)
+# Display and retrieve information for primary amine:
+# display_structure("primary amine", amine_smiles, amine_df) #uncomment if you want to plot the structure
 
-# Aryl-bromide input loop
+# Aryl-bromide input loop:
 br_smiles, br_pred = get_input("aryl-bromide", br_df, 'Steric')
-# Display and retrieve information for aryl-bromide
-display_structure("aryl-bromide", br_smiles, br_df)
+# Display and retrieve information for aryl-bromide:
+# display_structure("aryl-bromide", br_smiles, br_df) #uncomment if you want to plot the structure
+
+# amine_smiles = "NC1=CC=CC=C1" 
+# br_smiles = "BrC1=CC=CC=C1"
+
+print(f"\nEntered substrates and expected product:")
+draw_reaction_image(amine_smiles, br_smiles)
 
 # PREDICT THE YIELD OUTCOME, CONFIDENCE LEVEL, AND TOP LIGANDS
 
@@ -319,6 +461,25 @@ P1, P1_info, P2, P2_info = get_nearest_neighbors(input_data, knn_model, training
 # Plot confidence contour
 plot_confidence_contour(x_grid, y_grid, input_data, confidence_pred)
 
-# Display information on top ligands
-display_ligands_info(P1_info, ligands)
-display_ligands_info(P2_info, ligands)
+print("...............................................................................")
+print(".                                                                             .")
+print(".                    Ullmann C–N ligand suggestion tool                       .")
+print(".                  The Sigman Lab (developer: Lucas Karas)                    .")
+print(".                                                                             .")
+print("...............................................................................")
+
+
+ligands_P1_info = get_ligands_info(P1_info)
+ligands_P2_info = get_ligands_info(P2_info)
+
+print_product_info(P1, ligands_P1_info, 1)
+# draw_reaction_image(training_dict[P1]['am_smiles'], training_dict[P1]['arbr_smiles']) #uncomment if you want to see the neighbor structure
+print_product_info(P2, ligands_P2_info, 2)
+# draw_reaction_image(training_dict[P2]['am_smiles'], training_dict[P2]['arbr_smiles']) #uncomment if you want to see the neighbor structure
+
+#Display information on top ligands 
+print(f"\nBased on that, here are the ligands we suggest trying for this reaction:")
+display_ligands_info(P1, P1_info, P2_info, ligands)
+ligands_P1_info = get_ligands_info(P1_info)
+ligands_P2_info = get_ligands_info(P2_info)
+
